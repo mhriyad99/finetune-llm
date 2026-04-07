@@ -62,7 +62,6 @@ def load_jsonl(path):
                 rows.append(json.loads(line))
     return rows
 
-
 def apply_template(examples, tokenizer):
     texts = []
     tools_list = examples.get("tools", [None] * len(examples["messages"]))
@@ -75,7 +74,6 @@ def apply_template(examples, tokenizer):
         )
         texts.append(text)
     return {"text": texts}
-
 
 def truncate(examples, tokenizer):
     tokenized = tokenizer(
@@ -90,8 +88,17 @@ def truncate(examples, tokenizer):
         )
     }
 
-# ── GPU info ──────────────────────────────────────────────────────────────────
+def make_length_fn(tokenizer):
+    def get_token_length(examples):
+        lengths = [
+            len(tokenizer(text)["input_ids"])
+            for text in examples["text"]
+        ]
+        return {"length": lengths}
+    return get_token_length
 
+
+# ── GPU info ──────────────────────────────────────────────────────────────────
 def print_gpu_info():
     if torch.cuda.is_available():
         log.info(f"GPU  : {torch.cuda.get_device_name(0)}")
@@ -99,8 +106,8 @@ def print_gpu_info():
     else:
         log.warning("No CUDA GPU found!")
 
-# ── Train ─────────────────────────────────────────────────────────────────────
 
+# ── Train ─────────────────────────────────────────────────────────────────────
 def train(resume=False, dry_run=False):
     print_gpu_info()
 
@@ -132,10 +139,19 @@ def train(resume=False, dry_run=False):
     )
 
     # Truncate
-    train_dataset = train_dataset.map(lambda ex: truncate(ex, tokenizer), batched=True)
-    val_dataset   = val_dataset.map(lambda ex: truncate(ex, tokenizer),   batched=True)
+    # train_dataset = train_dataset.map(lambda ex: truncate(ex, tokenizer), batched=True)
+    # val_dataset   = val_dataset.map(lambda ex: truncate(ex, tokenizer),   batched=True)
 
-    log.info(f"Sample: {train_dataset[0]['text'][:300]}")
+    #Filter
+    get_token_length = make_length_fn(tokenizer)
+    train_dataset = train_dataset.map(get_token_length, batched=True)
+    val_dataset = val_dataset.map(get_token_length, batched=True)
+
+    train_dataset = train_dataset.filter(lambda x: x["length"] <= 4096)
+    val_dataset = val_dataset.filter(lambda x: x["length"] <= 4096)
+
+    log.info(f"Train after filter: {len(train_dataset)}")
+    log.info(f"Val after filter: {len(val_dataset)}")
 
     # ── Load model in 4-bit ───────────────────────────────────────────────────
     log.info(f"Loading model: {MODEL_ID}")
@@ -272,10 +288,7 @@ def train(resume=False, dry_run=False):
 
 
 
-
-
 # ── Merge ─────────────────────────────────────────────────────────────────────
-
 def merge(adapter_path=None, tokenizer=None):
     if adapter_path is None:
         adapter_path = f"{OUTPUT_DIR}/lora-adapter"
@@ -301,8 +314,6 @@ def merge(adapter_path=None, tokenizer=None):
 
     log.info(f"Merged model saved to {merged_path}")
     log.info("Next: convert to GGUF with llama.cpp for Ollama")
-
-
 
 
 
